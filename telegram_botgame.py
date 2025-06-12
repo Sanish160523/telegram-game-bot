@@ -1,22 +1,20 @@
-# crash_game_bot.py
+# telegram_botgame.py
+
 import asyncio
 import random
 import sqlite3
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = '8062030427:AAHM40ruZOHIXuztNqEkHMm8A9SYFk8RDa8'
-ADMIN_USER_ID = 6980794051
+TOKEN = '8062030427:AAHM40ruZOHIXuztNqEkHMm8A9SYFk8RDa8'  # Replace with your actual bot token
+ADMIN_USER_ID = 6269404426  # Replace with the correct admin Telegram ID
 DB_FILE = 'crashbot.db'
 
 crash_game_active = False
 crash_players = {}
 crash_cashouts = {}
 crash_multiplier = 1.0
+manual_crash_point = None
 
 # --- DB Setup ---
 def init_db():
@@ -51,8 +49,9 @@ def update_balance(user_id, amount):
 
 # --- Command Handlers ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    update_balance(update.effective_user.id, 0)
-    await update.message.reply_text("🎮 Welcome to CrashBot! Use /balance, /joincrash <amount>, and /cashout to play.")
+    user_id = update.effective_user.id
+    update_balance(user_id, 0)
+    await update.message.reply_text(f"🎮 Welcome to CrashBot! Your user ID is: `{user_id}`", parse_mode='Markdown')
 
 async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -85,8 +84,8 @@ async def joincrash(update: Update, context: ContextTypes.DEFAULT_TYPE):
         crash_cashouts.clear()
         update_balance(user_id, -amount)
         crash_game_active = True
-        await update.message.reply_text("🚀 Crash round starting in 5s!")
-        await asyncio.sleep(5)
+        await update.message.reply_text("🚀 Crash round starting in 10s!")
+        await asyncio.sleep(10)
         asyncio.create_task(run_crash_round(context, update.effective_chat.id))
 
 async def cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,10 +96,27 @@ async def cashout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("❌ You're not in or already cashed out.")
 
+async def setcrash(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global manual_crash_point
+    user_id = update.effective_user.id
+
+    if user_id != ADMIN_USER_ID:
+        await update.message.reply_text("❌ Only the admin can set the crash point.")
+        return
+
+    if not context.args or not context.args[0].replace(".", "", 1).isdigit():
+        await update.message.reply_text("Usage: /setcrash <multiplier>")
+        return
+
+    manual_crash_point = float(context.args[0])
+    await update.message.reply_text(f"✅ Crash point set to {manual_crash_point:.2f}x by admin.")
+
 async def run_crash_round(context: ContextTypes.DEFAULT_TYPE, chat_id):
-    global crash_multiplier, crash_game_active, crash_players, crash_cashouts
+    global crash_multiplier, crash_game_active, crash_players, crash_cashouts, manual_crash_point
+
     crash_multiplier = 1.0
-    crash_point = random.uniform(1.5, 5.0)
+    crash_point = manual_crash_point if manual_crash_point else random.uniform(1.5, 5.0)
+    manual_crash_point = None
 
     while crash_multiplier < crash_point:
         await context.bot.send_message(chat_id, f"📈 Multiplier: {crash_multiplier:.2f}x")
@@ -130,6 +146,7 @@ def main():
     app.add_handler(CommandHandler("balance", balance))
     app.add_handler(CommandHandler("joincrash", joincrash))
     app.add_handler(CommandHandler("cashout", cashout))
+    app.add_handler(CommandHandler("setcrash", setcrash))
     app.run_polling()
 
 if __name__ == "__main__":
