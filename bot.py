@@ -1,90 +1,89 @@
-# crash/bot.py
-
-import logging
+import threading
 import random
-import sqlite3
+from flask import Flask
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    ContextTypes,
-)
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"  # Replace this with your bot token
+# Replace this with your Telegram Bot Token
+TOKEN = "Y8062030427:AAHM40ruZOHIXuztNqEkHMm8A9SYFk8RDa8"
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# In-memory balance storage (use database for production)
+user_balances = {}
 
-# Database connection
-conn = sqlite3.connect("users.db", check_same_thread=False)
-cursor = conn.cursor()
-cursor.execute('''CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    balance INTEGER DEFAULT 1000
-)''')
-conn.commit()
+# Flask app for Render
+web_app = Flask(__name__)
 
-# Helper functions
-def get_balance(user_id):
-    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    return row[0] if row else 1000
+@web_app.route('/')
+def home():
+    return "✅ Big-Small Bot is running on Render (Free Tier)"
 
-def update_balance(user_id, amount):
-    current = get_balance(user_id)
-    new = current + amount
-    cursor.execute("INSERT OR REPLACE INTO users (user_id, balance) VALUES (?, ?)", (user_id, new))
-    conn.commit()
+# --- Telegram Bot Logic ---
 
-# Bot commands
+# /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    update_balance(user_id, 0)
-    await update.message.reply_text("🎮 Welcome to Big Small Game!\n\nUse /big or /small to play.\nEach user starts with ₹1000.\nCheck your balance using /balance.")
-
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    bal = get_balance(user_id)
-    await update.message.reply_text(f"💰 Your balance: ₹{bal}")
-
-async def big(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await handle_bet(update, context, "big")
-
-async def small(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await handle_bet(update, context, "small")
-
-async def handle_bet(update: Update, context: ContextTypes.DEFAULT_TYPE, guess: str):
-    user_id = update.effective_user.id
-
-    try:
-        amount = int(context.args[0])
-    except:
-        await update.message.reply_text("❗ Usage: /big 100 or /small 100")
-        return
-
-    bal = get_balance(user_id)
-    if amount > bal:
-        await update.message.reply_text("😞 Insufficient balance.")
-        return
-
-    dice = random.randint(1, 6)
-    result = "big" if dice >= 4 else "small"
-    won = (guess == result)
-    change = amount if won else -amount
-    update_balance(user_id, change)
-
+    if user_id not in user_balances:
+        user_balances[user_id] = 100  # Give starting balance
     await update.message.reply_text(
-        f"🎲 Dice rolled: {dice} ({result})\n"
-        + ("✅ You *won!*" if won else "❌ You *lost.*")
-        + f"\n💰 New balance: ₹{get_balance(user_id)}",
-        parse_mode="Markdown"
+        "🎲 Welcome to the Big-Small Betting Game!\nUse /bet <big/small> <amount>\nUse /balance to check balance."
     )
 
-# Start bot
-if __name__ == "__main__":
+# /balance
+async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    balance = user_balances.get(user_id, 0)
+    await update.message.reply_text(f"💰 Your balance: ₹{balance}")
+
+# /bet big/small 50
+async def bet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    args = context.args
+
+    if len(args) != 2:
+        await update.message.reply_text("❌ Usage: /bet <big/small> <amount>")
+        return
+
+    choice = args[0].lower()
+    amount = args[1]
+
+    if choice not in ["big", "small"]:
+        await update.message.reply_text("❌ Choose 'big' or 'small'")
+        return
+
+    try:
+        amount = int(amount)
+    except ValueError:
+        await update.message.reply_text("❌ Amount must be a number")
+        return
+
+    balance = user_balances.get(user_id, 100)
+    if amount > balance:
+        await update.message.reply_text("❌ Insufficient balance")
+        return
+
+    roll = random.randint(1, 6)
+    result = "big" if roll >= 4 else "small"
+    win = choice == result
+
+    if win:
+        user_balances[user_id] = balance + amount
+        msg = f"🎉 You WON! Dice rolled {roll} ({result.upper()})\n💰 New balance: ₹{user_balances[user_id]}"
+    else:
+        user_balances[user_id] = balance - amount
+        msg = f"😢 You LOST! Dice rolled {roll} ({result.upper()})\n💰 New balance: ₹{user_balances[user_id]}"
+
+    await update.message.reply_text(msg)
+
+# Start the Telegram bot in a separate thread
+def run_bot():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("balance", balance))
-    app.add_handler(CommandHandler("big", big))
-    app.add_handler(CommandHandler("small", small))
+    app.add_handler(CommandHandler("bet", bet))
     app.run_polling()
+
+threading.Thread(target=run_bot).start()
+
+# Run Flask app (Render requires binding to a port)
+if __name__ == '__main__':
+    web_app.run(host="0.0.0.0", port=10000)
